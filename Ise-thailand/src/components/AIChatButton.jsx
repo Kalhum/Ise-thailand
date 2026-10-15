@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from 'react';
-import api from '../api/axios';
 import config from '../config';
 import { MessageCircle } from 'lucide-react'
 
@@ -9,6 +8,7 @@ function AIChatButton() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef(null);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -24,9 +24,13 @@ function AIChatButton() {
 
     setMessages((prev) => [...prev, { role: 'ai', text: '' }]);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const response = await fetch(`${config.BASE_URL}/api/ai/royal-chat`, {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
@@ -67,6 +71,7 @@ function AIChatButton() {
       }
 
     } catch (err) {
+      if (err.name === 'AbortError') return;
       setMessages((prev) => [
         ...prev,
         { role: 'ai', text: 'เกิดข้อผิดพลาด กรุณาลองใหม่', isError: true },
@@ -83,13 +88,8 @@ function AIChatButton() {
     }
   };
 
-  const stopMessage = async () => {
-    try {
-      await api.post('/ai/royal-chat/stop');
-      setLoading(false);
-    } catch (error) {
-      console.error(error);
-    }
+  const stopMessage = () => {
+    abortRef.current?.abort();
   };
 
   const formatText = (text) => {

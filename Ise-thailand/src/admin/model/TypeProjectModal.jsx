@@ -3,6 +3,22 @@ import { X, Image } from "lucide-react"
 
 import { UPLOADS_URL } from "../../constants/uploads_url"
 
+// ค่าที่ถือว่า "ไม่มีรูป" (string ที่ truthy แต่ไม่ใช่รูปจริง)
+const INVALID_IMAGE_VALUES = ['null', 'undefined', '-', 'none', 'n/a']
+
+const hasValidImage = (img) => {
+  if (!img) return false
+  const v = String(img).trim().toLowerCase()
+  return v !== '' && !INVALID_IMAGE_VALUES.includes(v)
+}
+
+// ต่อ base URL กับชื่อไฟล์ โดยไม่ให้ขาด/ซ้ำ "/"
+const buildImageUrl = (img) => {
+  const base = String(UPLOADS_URL || '').replace(/\/+$/, '')
+  const file = String(img).trim().replace(/^\/+/, '')
+  return `${base}/${file}`
+}
+
 export default function TypeProjectModal({ isOpen, onClose, onSave, editData }) {
   const [form, setForm] = useState({ type_name: '', type_name_eng: '' })
   const [imageFile, setImageFile] = useState(null)
@@ -11,19 +27,38 @@ export default function TypeProjectModal({ isOpen, onClose, onSave, editData }) 
 
   useEffect(() => {
     if (editData) {
+      const validImage = hasValidImage(editData.type_image)
       setForm({
         type_id: editData.type_id,
         type_name: editData.type_name || '',
         type_name_eng: editData.type_name_eng || '',
-        type_image: editData.type_image || '',
+        // ถ้าค่าเดิมใช้ไม่ได้ ให้เป็นค่าว่างเลย จะได้ไม่ส่งค่าพังกลับไป server
+        type_image: validImage ? editData.type_image : '',
       })
-      setImagePreview(editData.type_image ? `${UPLOADS_URL}${editData.type_image}` : null)
+      setImagePreview(validImage ? buildImageUrl(editData.type_image) : null)
     } else {
       setForm({ type_name: '', type_name_eng: '' })
       setImagePreview(null)
     }
     setImageFile(null)
   }, [editData, isOpen])
+
+  // ล้างไฟล์ที่เลือก + ล้างค่า type_image เดิมในฟอร์ม
+  const clearImage = () => {
+    setImagePreview(null)
+    setImageFile(null)
+    setForm(f => ({ ...f, type_image: '' }))
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  // ป้องกัน memory leak จาก blob URL
+  useEffect(() => {
+    return () => {
+      if (imagePreview && imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview)
+      }
+    }
+  }, [imagePreview])
 
   if (!isOpen) return null
 
@@ -89,9 +124,16 @@ export default function TypeProjectModal({ isOpen, onClose, onSave, editData }) 
             </label>
             {imagePreview ? (
               <div className="relative mb-2 rounded-xl overflow-hidden border border-[var(--color-border)] bg-[var(--color-surface-2)]" style={{ height: 140 }}>
-                <img src={imagePreview} alt="preview" className="w-full h-full object-contain p-2" />
+                <img
+                  src={imagePreview}
+                  alt="preview"
+                  className="w-full h-full object-contain p-2"
+                  // ถ้ารูปโหลดไม่ได้ (404, path ผิด) ให้กลับไปแสดงกล่องอัปโหลด
+                  onError={clearImage}
+                />
                 <button
-                  onClick={() => { setImagePreview(null); setImageFile(null); setForm(f => ({ ...f, type_image: '' })) }}
+                  type="button"
+                  onClick={clearImage}
                   className="absolute top-2 right-2 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center text-xs hover:bg-red-600 cursor-pointer">
                   ✕
                 </button>

@@ -1,21 +1,87 @@
 import { useState, useEffect, useRef } from "react";
-import { X, FileText, Image, Link, User, Tag } from "lucide-react";
+import { X, FileText, Image, User, Tag } from "lucide-react";
 import api from "../../api/axios";
 import { useAuth } from "../../hook/useAuth";
 import { UPLOADS_URL } from '../../constants/uploads_url.js'
 
-export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuccess, onError, editData = null, typeId = null }) {
+// ---------- helpers ----------
+const INVALID_FILE_VALUES = ['null', 'undefined', '-', 'none', 'n/a']
+
+const hasValidFile = (v) => {
+    if (!v) return false
+    const s = String(v).trim().toLowerCase()
+    return s !== '' && !INVALID_FILE_VALUES.includes(s)
+}
+
+// ต่อ base URL กับชื่อไฟล์ โดยไม่ให้ขาด/ซ้ำ "/"
+const buildFileUrl = (file) => {
+    const base = String(UPLOADS_URL || '').replace(/\/+$/, '')
+    const name = String(file).trim().replace(/^\/+/, '')
+    return `${base}/${name}`
+}
+
+const inputClass = "w-full px-3 py-2 border border-[var(--color-border)] rounded-xl text-sm bg-white text-[var(--color-deep-text)] focus:outline-none focus:border-[var(--color-border-focus)] focus:ring-2 focus:ring-[var(--color-green-light)]/40 transition-all placeholder:text-[var(--color-muted-text)]";
+const labelClass = "block text-xs font-bold text-[var(--color-muted-text)] uppercase tracking-wide mb-1.5";
+
+// ---------- sub components ----------
+// ต้องประกาศนอก AssetModal เสมอ ถ้าประกาศข้างในจะถูกสร้างใหม่ทุกครั้งที่ render
+// ทำให้ textarea ถูก unmount/mount ใหม่และเสีย focus ทุกครั้งที่พิมพ์
+function SectionHeader({ icon: Icon, title }) {
+    return (
+        <div className="flex items-center gap-2 mb-3">
+            <div className="w-6 h-6 rounded-lg bg-[var(--color-green-light)]/20 flex items-center justify-center shrink-0">
+                <Icon className="w-3.5 h-3.5 text-[var(--color-green)]" />
+            </div>
+            <span className="text-xs font-bold text-[var(--color-deep-text)] uppercase tracking-wide">{title}</span>
+            <div className="flex-1 h-px bg-[var(--color-surface-3)]" />
+        </div>
+    )
+}
+
+function AutoResizeTextarea({ name, value, onChange, placeholder, className, minRows = 2, disabled }) {
+    const ref = useRef(null);
+
+    useEffect(() => {
+        if (ref.current) {
+            ref.current.style.height = "auto";
+            ref.current.style.height = Math.max(ref.current.scrollHeight, minRows * 24) + "px";
+        }
+    }, [value, minRows]);
+
+    return (
+        <textarea
+            ref={ref}
+            name={name}
+            value={value}
+            onChange={onChange}
+            placeholder={placeholder}
+            disabled={disabled}
+            rows={minRows}
+            className={`${className} resize-none overflow-hidden`}
+            style={{ minHeight: minRows * 24 + "px" }}
+        />
+    )
+}
+
+// ---------- main component ----------
+export default function AssetModal({
+    open, onClose, onCreateSuccess, onUpdateSuccess, onError,
+    editData = null, typeId = null, typeName = ""
+}) {
 
     const { user } = useAuth();
     const isEdit = !!editData;
     const [researchers, setResearchers] = useState([]);
     const [assetTypes, setAssetTypes] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [imgObjectUrl, setImgObjectUrl] = useState(null);
+    const [imgError, setImgError] = useState(false);
     const [form, setForm] = useState({
         assettype_id: "", asset_name: "", asset_name_eng: "",
         asset_detail: "", asset_detail_eng: "",
         researcher_id: "", url_ebook: "",
         img_file: null, pdf_file: null,
+        old_img_file: "", old_pdf_file: "",
     });
 
     useEffect(() => {
@@ -23,19 +89,8 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
         api.get("/asset/researchers").then(res => setResearchers(res.data.data || [])).catch(console.error);
     }, []);
 
-    // Auto-resize textarea hook
-    const useAutoResize = (value) => {
-        const ref = useRef(null);
-        useEffect(() => {
-            if (ref.current) {
-                ref.current.style.height = "auto";
-                ref.current.style.height = ref.current.scrollHeight + "px";
-            }
-        }, [value]);
-        return ref;
-    };
-
     useEffect(() => {
+        setImgError(false)
         if (isEdit && editData) {
             setForm({
                 assettype_id: editData.assettype_id || "",
@@ -46,8 +101,8 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                 researcher_id: editData.researcher_id || "",
                 url_ebook: editData.url_ebook || "",
                 img_file: null, pdf_file: null,
-                old_img_file: editData.img_file || "",
-                old_pdf_file: editData.pdf_file || "",
+                old_img_file: hasValidFile(editData.img_file) ? editData.img_file : "",
+                old_pdf_file: hasValidFile(editData.pdf_file) ? editData.pdf_file : "",
             });
         } else {
             setForm({
@@ -61,14 +116,36 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
         }
     }, [editData, open, typeId]);
 
+    // สร้าง blob URL ครั้งเดียวต่อไฟล์ที่เลือก (แทนการสร้างใหม่ทุก render) และคืนหน่วยความจำตอนเปลี่ยน/ปิด
+    useEffect(() => {
+        if (!form.img_file) {
+            setImgObjectUrl(null)
+            return
+        }
+        const url = URL.createObjectURL(form.img_file)
+        setImgObjectUrl(url)
+        return () => URL.revokeObjectURL(url)
+    }, [form.img_file])
+
     const handleChange = (e) => {
         const { name, value, files } = e.target;
-        if (files) setForm(f => ({ ...f, [name]: files[0] }));
-        else setForm(f => ({ ...f, [name]: value }));
+        if (files) {
+            if (name === "img_file") setImgError(false)
+            setForm(f => ({ ...f, [name]: files[0] }));
+        } else {
+            setForm(f => ({ ...f, [name]: value }));
+        }
     };
 
+    // ชื่อประเภทสำหรับแสดงใน modal: ใช้ที่ส่งมาก่อน ถ้าไม่มีให้หาจากประเภทที่เลือกอยู่
+    const currentTypeName =
+        typeName ||
+        assetTypes.find(t => String(t.assettype_id) === String(form.assettype_id))?.assettype_name ||
+        ""
+    const label = currentTypeName || "สินทรัพย์"
+
     const handleSubmit = async () => {
-        if (!form.asset_name || !form.assettype_id) { onError("ชื่อและประเภทสินทรัพย์จำเป็นต้องกรอก"); return; }
+        if (!form.asset_name || !form.assettype_id) { onError(`ชื่อและประเภทของ${label}จำเป็นต้องกรอก`); return; }
         setLoading(true);
         const formData = new FormData();
         ["assettype_id", "asset_name", "asset_name_eng", "asset_detail", "asset_detail_eng", "researcher_id", "url_ebook"]
@@ -88,57 +165,15 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
 
     if (!open) return null;
 
-    const inputClass = "w-full px-3 py-2 border border-[var(--color-border)] rounded-xl text-sm bg-white text-[var(--color-deep-text)] focus:outline-none focus:border-[var(--color-border-focus)] focus:ring-2 focus:ring-[var(--color-green-light)]/40 transition-all placeholder:text-[var(--color-muted-text)]";
-    const labelClass = "block text-xs font-bold text-[var(--color-muted-text)] uppercase tracking-wide mb-1.5";
-
-    // preview URLs
-    const imgPreviewUrl = form.img_file
-        ? URL.createObjectURL(form.img_file)
-        : form.old_img_file
-            ? UPLOADS_URL + form.old_img_file
-            : null;
+    // preview: ไฟล์ที่เพิ่งเลือก > รูปเดิมจาก server (ถ้ายังโหลดได้)
+    const oldImgUrl = form.old_img_file ? buildFileUrl(form.old_img_file) : null
+    const imgPreviewUrl = imgObjectUrl || (oldImgUrl && !imgError ? oldImgUrl : null)
+    const oldImgBroken = !form.img_file && !!form.old_img_file && imgError
 
     const pdfName = form.pdf_file?.name || form.old_pdf_file || null;
-    const pdfUrl = form.old_pdf_file && !form.pdf_file ? UPLOADS_URL + form.old_pdf_file : null;
+    const pdfUrl = form.old_pdf_file && !form.pdf_file ? buildFileUrl(form.old_pdf_file) : null;
 
-    // Section header component
-    const SectionHeader = ({ icon: Icon, title }) => (
-        <div className="flex items-center gap-2 mb-3">
-            <div className="w-6 h-6 rounded-lg bg-[var(--color-green-light)]/20 flex items-center justify-center shrink-0">
-                <Icon className="w-3.5 h-3.5 text-[var(--color-green)]" />
-            </div>
-            <span className="text-xs font-bold text-[var(--color-deep-text)] uppercase tracking-wide">{title}</span>
-            <div className="flex-1 h-px bg-[var(--color-surface-3)]" />
-        </div>
-    );
-
-    const AutoResizeTextarea = ({ name, value, onChange, placeholder, className, minRows = 2 }) => {
-        const ref = useRef(null);
-
-        useEffect(() => {
-            if (ref.current) {
-                ref.current.style.height = "auto";
-                ref.current.style.height = Math.max(ref.current.scrollHeight, minRows * 24) + "px";
-            }
-        }, [value, minRows]);
-
-        return (
-            <textarea
-                ref={ref}
-                name={name}
-                value={value}
-                onChange={onChange}
-                placeholder={placeholder}
-                disabled={loading}
-                rows={minRows}
-                className={`${className} resize-none overflow-hidden`}
-                style={{ minHeight: minRows * 24 + "px" }}
-            />
-        );
-    };
-    
     return (
-
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden">
 
@@ -150,10 +185,10 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                         </div>
                         <div>
                             <h2 className="text-base font-extrabold text-[var(--color-deep-text)]">
-                                {isEdit ? "แก้ไขสินทรัพย์" : "เพิ่มสินทรัพย์ใหม่"}
+                                {isEdit ? `แก้ไข${label}` : `เพิ่ม${label}ใหม่`}
                             </h2>
                             <p className="text-xs text-[var(--color-muted-text)] mt-0.5">
-                                {isEdit ? "แก้ไขข้อมูลสินทรัพย์" : "กรอกข้อมูลเพื่อเพิ่มสินทรัพย์ใหม่"}
+                                {isEdit ? `แก้ไขข้อมูล${label}` : `กรอกข้อมูลเพื่อเพิ่ม${label}ใหม่`}
                             </p>
                         </div>
                     </div>
@@ -174,7 +209,13 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                             <label className="block cursor-pointer group">
                                 {imgPreviewUrl ? (
                                     <div className="relative rounded-2xl overflow-hidden border border-[var(--color-border)] aspect-square">
-                                        <img src={imgPreviewUrl} alt="preview" className="w-full h-full object-cover" />
+                                        <img
+                                            src={imgPreviewUrl}
+                                            alt="preview"
+                                            className="w-full h-full object-cover"
+                                            // รูปเดิมโหลดไม่ได้ (404 / path ผิด) ให้สลับไปแสดงกล่องอัปโหลด
+                                            onError={() => setImgError(true)}
+                                        />
                                         {/* Overlay เมื่อ hover */}
                                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                             <div className="text-center text-white">
@@ -197,6 +238,11 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                             {imgPreviewUrl && (
                                 <p className="text-xs text-center text-[var(--color-muted-text)] mt-1.5 truncate px-1">
                                     {form.img_file?.name || form.old_img_file}
+                                </p>
+                            )}
+                            {oldImgBroken && (
+                                <p className="text-xs text-center text-red-400 mt-1.5 px-1">
+                                    โหลดรูปเดิมไม่ได้ ({form.old_img_file}) เลือกรูปใหม่เพื่อแทนที่
                                 </p>
                             )}
                         </div>
@@ -244,10 +290,9 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                             </div>
                         )}
 
-                        {/* Section: ชื่อ */}
                         {/* ชื่อ */}
                         <div>
-                            <SectionHeader icon={FileText} title="ชื่อสินทรัพย์" />
+                            <SectionHeader icon={FileText} title={`ชื่อ${label}`} />
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 <div>
                                     <label className={labelClass}>ภาษาไทย <span className="text-red-400 normal-case tracking-normal">*</span></label>
@@ -255,8 +300,9 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                                         name="asset_name"
                                         value={form.asset_name}
                                         onChange={handleChange}
-                                        placeholder="ชื่อสินทรัพย์ภาษาไทย..."
+                                        placeholder={`ชื่อ${label}ภาษาไทย...`}
                                         className={inputClass}
+                                        disabled={loading}
                                     />
                                 </div>
                                 <div>
@@ -265,8 +311,9 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                                         name="asset_name_eng"
                                         value={form.asset_name_eng}
                                         onChange={handleChange}
-                                        placeholder="Asset name in English..."
+                                        placeholder="Name in English..."
                                         className={inputClass}
+                                        disabled={loading}
                                     />
                                 </div>
                             </div>
@@ -285,6 +332,7 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                                         placeholder="รายละเอียด..."
                                         className={inputClass}
                                         minRows={4}
+                                        disabled={loading}
                                     />
                                 </div>
                                 <div>
@@ -293,9 +341,10 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                                         name="asset_detail_eng"
                                         value={form.asset_detail_eng}
                                         onChange={handleChange}
-                                        placeholder="Asset detail in English..."
+                                        placeholder="Detail in English..."
                                         className={inputClass}
                                         minRows={4}
+                                        disabled={loading}
                                     />
                                 </div>
                             </div>
@@ -337,7 +386,7 @@ export default function AssetModal({ open, onClose, onCreateSuccess, onUpdateSuc
                         </button>
                         <button onClick={handleSubmit} disabled={loading}
                             className="px-5 py-2.5 rounded-xl bg-[var(--color-green)] text-white text-sm font-bold hover:bg-[var(--color-forest-green)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
-                            {loading ? "กำลังบันทึก..." : isEdit ? "บันทึกการแก้ไข" : "เพิ่มสินทรัพย์"}
+                            {loading ? "กำลังบันทึก..." : isEdit ? "บันทึกการแก้ไข" : `เพิ่ม${label}`}
                         </button>
                     </div>
                 </div>
